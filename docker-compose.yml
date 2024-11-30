@@ -13,7 +13,7 @@ services:
 
   bot_v2:
     container_name: bot_v2
-    command: python3 bot/bot.py
+    command: python bot/bot.py
     restart: always
     build:
       context: "."
