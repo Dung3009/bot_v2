@@ -1,0 +1,22 @@
+version: "3"
+
+services:
+  mongo:
+    container_name: mongo
+    image: mongo:latest
+    restart: always
+    ports:
+      - 27017:27017
+    volumes:
+      - ${MONGODB_PATH:-./mongodb}:/data/db
+    # TODO: add auth
+
+  bot_v2:
+    container_name: bot_v2
+    command: python3 bot/bot.py
+    restart: always
+    build:
+      context: "."
+      dockerfile: Dockerfile
+    depends_on:
+      - mongo
