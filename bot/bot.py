@@ -33,6 +33,7 @@ import openai_utils
 
 print(config.allowed_telegram_usernames)
 import base64
+from analyze_func import analyze_trader
 
 # setup
 db = database.Database()
@@ -45,8 +46,8 @@ HELP_MESSAGE = """Commands:
 ⚪ /retry – Regenerate last bot answer
 ⚪ /new – Start new dialog
 ⚪ /mode – Select chat mode
+⚪ /strategy – Select strategy
 ⚪ /settings – Show settings
-⚪ /balance – Show balance
 ⚪ /help – Show help
 
 
@@ -81,6 +82,20 @@ async def show_chat_modes_handle(update: Update, context: CallbackContext):
     db.set_user_attribute(user_id, "last_interaction", datetime.now())
 
     text, reply_markup = get_chat_mode_menu(0)
+    await update.message.reply_text(
+        text, reply_markup=reply_markup, parse_mode=ParseMode.HTML
+    )
+
+
+async def show_chat_strategy_handle(update: Update, context: CallbackContext):
+    await register_user_if_not_exists(update, context, update.message.from_user)
+    if await is_previous_message_not_answered_yet(update, context):
+        return
+
+    user_id = update.message.from_user.id
+    db.set_user_attribute(user_id, "last_interaction", datetime.now())
+
+    text, reply_markup = get_chat_strategy_menu(0)
     await update.message.reply_text(
         text, reply_markup=reply_markup, parse_mode=ParseMode.HTML
     )
@@ -132,6 +147,61 @@ def get_chat_mode_menu(page_index: int):
                     ),
                     InlineKeyboardButton(
                         "»", callback_data=f"show_chat_modes|{page_index + 1}"
+                    ),
+                ]
+            )
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    return text, reply_markup
+
+
+def get_chat_strategy_menu(page_index: int):
+    n_strategy_per_page = config.n_strategy_per_page
+    text = f"Select <b>strategy </b> ({len(config.strategy)} you want):"
+
+    # buttons
+    strategy_keys = list(config.strategy.keys())
+    page_strategy_keys = strategy_keys[
+        page_index * n_strategy_per_page : (page_index + 1) * n_strategy_per_page
+    ]
+
+    keyboard = []
+    for strategy_key in page_strategy_keys:
+        name = config.strategy[strategy_key]["name"]
+        keyboard.append(
+            [InlineKeyboardButton(name, callback_data=f"set_strategy|{strategy_key}")]
+        )
+
+    # pagination
+    if len(strategy_keys) > n_strategy_per_page:
+        is_first_page = page_index == 0
+        is_last_page = (page_index + 1) * n_strategy_per_page >= len(strategy_keys)
+
+        if is_first_page:
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        "»", callback_data=f"show_strategy|{page_index + 1}"
+                    )
+                ]
+            )
+        elif is_last_page:
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        "«", callback_data=f"show_strategy|{page_index - 1}"
+                    ),
+                ]
+            )
+        else:
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        "«", callback_data=f"show_strategy|{page_index - 1}"
+                    ),
+                    InlineKeyboardButton(
+                        "»", callback_data=f"show_strategy|{page_index + 1}"
                     ),
                 ]
             )
@@ -204,6 +274,32 @@ async def register_user_if_not_exists(
     # # image generation
     # if db.get_user_attribute(user.id, "n_generated_images") is None:
     #     db.set_user_attribute(user.id, "n_generated_images", 0)
+
+
+async def retry_handle(update: Update, context: CallbackContext):
+    await register_user_if_not_exists(update, context, update.message.from_user)
+    if await is_previous_message_not_answered_yet(update, context):
+        return
+
+    user_id = update.message.from_user.id
+    db.set_user_attribute(user_id, "last_interaction", datetime.now())
+
+    dialog_messages = db.get_dialog_messages(user_id, dialog_id=None)
+    if len(dialog_messages) == 0:
+        await update.message.reply_text("No message to retry 🤷‍♂️")
+        return
+
+    last_dialog_message = dialog_messages.pop()
+    db.set_dialog_messages(
+        user_id, dialog_messages, dialog_id=None
+    )  # last message was removed from the context
+
+    await message_handle(
+        update,
+        context,
+        message=last_dialog_message["user"],
+        use_new_dialog_timeout=False,
+    )
 
 
 async def message_handle(
@@ -453,6 +549,47 @@ async def set_chat_mode_handle(update: Update, context: CallbackContext):
     )
 
 
+async def set_strategy_handle(update: Update, context: CallbackContext):
+    await register_user_if_not_exists(
+        update.callback_query, context, update.callback_query.from_user
+    )
+    user_id = update.callback_query.from_user.id
+
+    query = update.callback_query
+    await query.answer()
+
+    strategy = query.data.split("|")[1]
+
+    if strategy == "day_trading":
+        list_traders = db.get_day_trading()
+    elif strategy == "scalping":
+        list_traders = db.get_scalping()
+    html_links = [
+        f'<a href="https://app.copin.io/trader/{doc["account"]}">{doc["account"]}</a>'
+        for doc in list_traders
+    ]
+
+    reply_text = "Here is top 10 traders in this strategy: 🤖\n\n"
+    for trader in html_links:
+        reply_text += f"Account: {trader}\n\n"
+    reply_text = reply_text[:4096]  # telegram message limit
+    db.start_new_dialog(user_id)
+    await context.bot.send_message(
+        update.callback_query.message.chat.id,
+        reply_text,
+        parse_mode=ParseMode.HTML,
+    )
+
+    # db.set_user_attribute(user_id, "current_chat_mode", chat_mode)
+    # db.start_new_dialog(user_id)
+
+    # await context.bot.send_message(
+    #     update.callback_query.message.chat.id,
+    #     f"{config.chat_modes[chat_mode]['welcome_message']}",
+    #     parse_mode=ParseMode.HTML,
+    # )
+
+
 def get_settings_menu(user_id: int):
     current_model = db.get_user_attribute(user_id, "current_model")
     text = config.models["info"][current_model]["description"]
@@ -547,8 +684,8 @@ async def post_init(application: Application):
         [
             BotCommand("/new", "Start new dialog"),
             BotCommand("/mode", "Select chat mode"),
+            BotCommand("/strategy", "Show some trader's strategy"),
             BotCommand("/retry", "Re-generate response for previous query"),
-            BotCommand("/balance", "Show balance"),
             BotCommand("/settings", "Show settings"),
             BotCommand("/help", "Show help message"),
         ]
@@ -592,7 +729,7 @@ def run_bot() -> None:
     )
     # application.add_handler(MessageHandler(filters.VIDEO & ~filters.COMMAND & user_filter, unsupport_message_handle))
     # application.add_handler(MessageHandler(filters.Document.ALL & ~filters.COMMAND & user_filter, unsupport_message_handle))
-    # application.add_handler(CommandHandler("retry", retry_handle, filters=user_filter))
+    application.add_handler(CommandHandler("retry", retry_handle, filters=user_filter))
     application.add_handler(
         CommandHandler("new", new_dialog_handle, filters=user_filter)
     )
@@ -605,11 +742,16 @@ def run_bot() -> None:
     application.add_handler(
         CommandHandler("mode", show_chat_modes_handle, filters=user_filter)
     )
+    application.add_handler(
+        CommandHandler("strategy", show_chat_strategy_handle, filters=user_filter)
+    )
     # application.add_handler(CallbackQueryHandler(show_chat_modes_callback_handle, pattern="^show_chat_modes"))
     application.add_handler(
         CallbackQueryHandler(set_chat_mode_handle, pattern="^set_chat_mode")
     )
-
+    application.add_handler(
+        CallbackQueryHandler(set_strategy_handle, pattern="^set_strategy")
+    )
     application.add_handler(
         CommandHandler("settings", settings_handle, filters=user_filter)
     )

@@ -8,7 +8,7 @@ numpy
 scikit-learn
 seaborn 
 python-telegram-bot[rate-limiter]
-openai
+openai==0.28
 tiktoken>=0.3.0
 PyYAML
 pymongo==4.3.3
